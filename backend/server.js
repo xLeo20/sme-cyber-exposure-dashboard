@@ -20,9 +20,10 @@ mongoose.connect(process.env.MONGO_URI)
 
 // Ruta de scanare actualizată
 app.get('/api/scan/:ip', async (req, res) => {
+    // Extragem IP-ul aici pentru a-l avea disponibil atât în try, cât și în catch
+    const { ip } = req.params; 
+    
     try {
-        const { ip } = req.params;
-        
         const response = await axios.get(`https://api.shodan.io/shodan/host/${ip}?key=${SHODAN_API_KEY}`);
         
         const vulns = response.data.vulns || [];
@@ -48,8 +49,36 @@ app.get('/api/scan/:ip', async (req, res) => {
         res.json({ success: true, data: newScan, message: "Scanare salvată cu succes!" });
         
     } catch (error) {
+        // Dacă Shodan returnează 404 (IP curat, fără porturi publice)
+        if (error.response && error.response.status === 404) {
+            console.log(`[INFO] IP-ul ${ip} nu are expunere publică în baza Shodan.`);
+            
+            const cleanResult = {
+                ip: ip,
+                organization: "Nedetectată",
+                os: "Nedetectat",
+                ports: [],
+                vulns: [],
+                shodan_last_update: new Date(),
+                riskScore: 0,
+                riskLevel: "Securizat",
+                recommendations: ["Infrastructura nu apare în scanările publice Shodan. Niciun serviciu expus detectat."]
+            };
+
+            try {
+                // Salvăm rezultatul "Securizat" în baza de date
+                const newScan = new Scan(cleanResult);
+                await newScan.save();
+                return res.json({ success: true, data: newScan, message: "Infrastructură securizată." });
+            } catch (dbErr) {
+                console.error("Eroare la salvarea rezultatului securizat:", dbErr.message);
+                return res.status(500).json({ success: false, message: "Eroare internă la salvarea istoricului." });
+            }
+        }
+
+        
         console.error("Eroare la scanare:", error.message);
-        res.status(500).json({ success: false, message: "Nu s-au putut prelua datele." });
+        res.status(500).json({ success: false, message: "Nu s-au putut prelua datele de la serverul Shodan." });
     }
 });
 
